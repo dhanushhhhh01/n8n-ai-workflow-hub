@@ -1,0 +1,75 @@
+{
+    "name": "IoT Webhook to InfluxDB Pipeline",
+    "nodes": [
+          {
+                  "parameters": {
+                            "httpMethod": "POST",
+                            "path": "iot-data",
+                            "responseMode": "onReceived",
+                            "options": {}
+                  },
+                  "name": "Webhook Receiver",
+                  "type": "n8n-nodes-base.webhook",
+                  "position": [250, 300]
+          },
+          {
+                  "parameters": {
+                            "jsCode": "const payload = $input.first().json;\nconst timestamp = new Date().toISOString();\nconst device_id = payload.device_id || 'unknown';\nconst measurements = payload.measurements || {};\n\nconst points = Object.entries(measurements).map(([field, value]) => ({\n  measurement: payload.sensor_type || 'sensor_data',\n  tags: { device_id, location: payload.location || 'unknown', unit: payload.unit || '' },\n  fields: { [field]: parseFloat(value) },\n  timestamp\n}));\n\nreturn points.map(p => ({ json: p }));"
+                  },
+                  "name": "Transform Payload",
+                  "type": "n8n-nodes-base.code",
+                  "position": [450, 300]
+          },
+          {
+                  "parameters": {
+                            "conditions": {
+                                        "number": [
+                                                      { "value1": "={{$json.fields.temperature}}", "operation": "larger", "value2": 85 }
+                                        ]
+                            }
+                  },
+                  "name": "Anomaly Check",
+                  "type": "n8n-nodes-base.if",
+                  "position": [650, 300]
+          },
+          {
+                  "parameters": {
+                            "url": "={{$env.INFLUXDB_URL}}/api/v2/write",
+                            "method": "POST",
+                            "authentication": "headerAuth",
+                            "headerParameters": {
+                                        "parameters": [
+                                                      { "name": "Authorization", "value": "Token ={{$env.INFLUXDB_TOKEN}}" },
+                                                      { "name": "Content-Type", "value": "text/plain; charset=utf-8" }
+                                        ]
+                            },
+                            "body": "={{$json.measurement}},device_id={{$json.tags.device_id}} temperature={{$json.fields.temperature}} {{Date.now()}}000000"
+                  },
+                  "name": "Write to InfluxDB",
+                  "type": "n8n-nodes-base.httpRequest",
+                  "position": [850, 400]
+          },
+          {
+                  "parameters": {
+                            "webhookUri": "={{$env.SLACK_WEBHOOK_URL}}",
+                            "text": "🌡️ ANOMALY DETECTED\nDevice: {{$json.tags.device_id}}\nTemp: {{$json.fields.temperature}}°C\nThreshold exceeded!"
+                  },
+                  "name": "Slack Alert",
+                  "type": "n8n-nodes-base.slack",
+                  "position": [850, 200]
+          }
+    ],
+    "connections": {
+          "Webhook Receiver": { "main": [[{ "node": "Transform Payload", "type": "main", "index": 0 }]] },
+          "Transform Payload": { "main": [[{ "node": "Anomaly Check", "type": "main", "index": 0 }]] },
+          "Anomaly Check": {
+                  "main": [
+                            [{ "node": "Slack Alert", "type": "main", "index": 0 }, { "node": "Write to InfluxDB", "type": "main", "index": 0 }],
+                            [{ "node": "Write to InfluxDB", "type": "main", "index": 0 }]
+                  ]
+          }
+    },
+    "active": true,
+    "settings": { "executionOrder": "v1" },
+    "tags": ["iot", "influxdb", "data-pipeline", "iiot"]
+}
